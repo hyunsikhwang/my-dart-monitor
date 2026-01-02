@@ -54,49 +54,77 @@ def get_corp_code_from_file(target_corp_name):
 def clean_html_for_ai(html_content):
     """HTML/XML 태그 제거 및 텍스트 정제"""
     try:
-        soup = BeautifulSoup(html_content, 'lxml')
-        
-        # 불필요한 태그 제거
+        """
+        HTML/XML 태그를 제거하고 AI가 구조를 파악하기 쉽게 텍스트를 정리합니다.
+        """
+        soup = BeautifulSoup(html_content, 'lxml') # lxml 파서가 빠르고 강력함
+
+        # 1. 불필요한 태그 제거 (Script, Style, 숨겨진 요소 등)
         for script in soup(["script", "style", "head", "meta", "noscript"]):
             script.extract()
-            
-        # 텍스트 추출 (줄바꿈 보존)
+
+        # 2. 표(Table) 처리 - AI에게 표는 매우 중요하므로 구조를 보존해야 함
+        # 간단히 텍스트를 탭이나 파이프(|)로 구분하여 Markdown 표처럼 보이게 변환 시도
+        # (복잡한 표는 별도 로직이 필요할 수 있으나, 일반적인 텍스트 추출 방식 적용)
+
+        # 3. 텍스트 추출 (get_text 사용 시 separator를 줄바꿈으로 지정)
         text = soup.get_text(separator="\n\n")
-        
-        # 공백 정리
+
+        # 4. 공백 정리 (연속된 줄바꿈 제거 등)
+        # 문장 사이의 과도한 공백은 Token 낭비의 주범입니다.
         lines = (line.strip() for line in text.splitlines())
         chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
         text = '\n'.join(chunk for chunk in chunks if chunk)
-        
+
         return text
     except Exception as e:
         return f"텍스트 정제 중 오류: {e}"
 
 def fetch_and_extract_dart_content(crtfc_key, rcept_no):
-    """DART API에서 공시 원문(XML) 다운로드 및 텍스트 추출"""
+    """
+    DART API에서 공시 원문(XML)을 다운로드하여 AI용 텍스트로 정제합니다.
+    """
+
+    # 1. API 요청 URL 생성
     api_url = "https://opendart.fss.or.kr/api/document.xml"
-    params = {'crtfc_key': crtfc_key, 'rcept_no': rcept_no}
+    params = {
+        'crtfc_key': crtfc_key,
+        'rcept_no': rcept_no
+    }
+
+    print(f"🔄 요청 중... (접수번호: {rcept_no})")
 
     try:
+        # 2. 파일 다운로드 (Stream 방식)
         response = requests.get(api_url, params=params)
-        response.raise_for_status()
+        response.raise_for_status() # 에러 발생 시 중단
 
+        # 3. ZIP 파일 처리 (디스크 저장 없이 메모리에서 바로 해제)
+        # DART document.xml API는 항상 ZIP 파일을 반환합니다.
         with zipfile.ZipFile(io.BytesIO(response.content)) as z:
-            # .xml 파일 찾기 (보통 최상위 혹은 첫 번째 파일)
+            # 압축 파일 내의 파일 목록 확인
             file_list = z.namelist()
-            xml_filename = next((f for f in file_list if f.endswith('.xml')), None)
-            
-            if not xml_filename:
-                # xml이 없으면 첫 번째 파일 시도
-                xml_filename = file_list[0]
+            print(f"📦 압축 파일 내 파일 목록: {file_list}")
+
+            # 보통 첫 번째 파일이 주된 공시 문서입니다. (혹은 .xml로 끝나는 파일 찾기)
+            xml_filename = [f for f in file_list if f.endswith('.xml')][0]
 
             with z.open(xml_filename) as f:
-                xml_content = f.read().decode('utf-8')
+                xml_content = f.read().decode('utf-8') # 한글 디코딩
 
-        return clean_html_for_ai(xml_content)
+        print("✅ 다운로드 및 압축 해제 완료. 텍스트 정제 시작...")
 
+        # 4. 텍스트 정제 (AI Input 최적화)
+        clean_text = clean_html_for_ai(xml_content)
+
+        return clean_text
+
+    except requests.exceptions.RequestException as e:
+        return f"❌ 네트워크 오류 발생: {e}"
+    except zipfile.BadZipFile:
+        return "❌ 유효하지 않은 ZIP 파일입니다. API Key나 접수번호를 확인해주세요."
     except Exception as e:
-        return f"본문 가져오기 실패: {e}"
+        return f"❌ 알 수 없는 오류 발생: {e}"
 
 # --- 3. 공시 검색 및 AI 분석 ---
 def get_recent_filings(corp_code):
