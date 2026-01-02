@@ -1,0 +1,38 @@
+name: Monthly Code Refresh
+
+on:
+  schedule:
+    - cron: '0 0 1 * *'     # 매월 1일 자정 실행
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  refresh-code:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+          
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run Refresh Script
+        env:
+          DART_API_KEY: ${{ secrets.DART_API_KEY }}
+        run: |
+          python main.py refresh
+
+      - name: Commit and Push changes
+        run: |
+          git config --global user.name "GitHub Action Bot"
+          git config --global user.email "action@github.com"
+          git add data/corp_codes.xml
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Refresh corp codes" && git push)

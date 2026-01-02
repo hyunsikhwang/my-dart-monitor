@@ -1,0 +1,43 @@
+name: DART Monitor
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'  # 30분마다 실행
+  workflow_dispatch:        # 수동 실행 가능
+
+permissions:
+  contents: write           # 저장소에 파일(json)을 쓰기 위해 권한 필요
+
+jobs:
+  check-dart:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run DART Monitor
+        env:
+          DART_API_KEY: ${{ secrets.DART_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python main.py
+
+      - name: Commit and Push state changes
+        run: |
+          git config --global user.name "GitHub Action Bot"
+          git config --global user.email "action@github.com"
+          git add data/latest_filings.json
+          # 변경사항이 있을 때만 커밋
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update filing state" && git push)
