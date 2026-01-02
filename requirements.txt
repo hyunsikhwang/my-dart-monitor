@@ -2,3 +2,5 @@ requests
 pandas
 python-dateutil
 openai
+beautifulsoup4
+lxml

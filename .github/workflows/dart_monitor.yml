@@ -41,6 +41,21 @@ jobs:
           git add data/latest_filings.json
           git diff --quiet && git diff --staged --quiet || (git commit -m "Update filing state" && git push)
 
-      # [추가된 부분] 60일 비활성화 방지용 액션
-      - name: Keepalive Workflow
-        uses: gautamkrishnar/keepalive-workflow@v1
+# [변경] 외부 액션 없이 자체적으로 60일 비활성화 방지 (순수 Git 명령어 사용)
+      - name: Keepalive (Anti-disable)
+        run: |
+          git config --global user.name "GitHub Action Bot"
+          git config --global user.email "action@github.com"
+          
+          # 마지막 커밋 날짜 확인
+          last_commit_date=$(git log -1 --format=%ct)
+          # 50일 전 날짜 (초 단위)
+          limit_date=$(date -d "50 days ago" +%s)
+          
+          # 마지막 커밋이 50일보다 오래되었으면 빈 커밋 생성
+          if [ $last_commit_date -lt $limit_date ]; then
+            git commit --allow-empty -m "Keepalive commit to prevent workflow disable"
+            git push
+          else
+            echo "No keepalive needed yet."
+          fi

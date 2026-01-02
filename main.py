@@ -8,8 +8,9 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from openai import OpenAI
+from bs4 import BeautifulSoup  # 추가된 라이브러리
 
-# --- 설정값 (GitHub Secrets에서 불러옴) ---
+# --- 설정값 (GitHub Secrets) ---
 DART_API_KEY = os.environ.get("DART_API_KEY")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -23,15 +24,13 @@ STATE_FILE = os.path.join(DATA_DIR, "latest_filings.json")
 
 # --- 1. DART 고유번호 관리 ---
 def update_corp_code_file():
-    """DART에서 고유번호 XML을 다운로드하여 파일로 저장 (월 1회 권장)"""
     url = "https://opendart.fss.or.kr/api/corpCode.xml"
     params = {'crtfc_key': DART_API_KEY}
     try:
         response = requests.get(url, params=params)
         response.raise_for_status()
         with zipfile.ZipFile(io.BytesIO(response.content)) as z:
-            z.extractall(DATA_DIR) # CORPCODE.xml 압축 해제
-            # 편의상 이름을 고정
+            z.extractall(DATA_DIR)
             extracted_name = z.namelist()[0]
             os.rename(os.path.join(DATA_DIR, extracted_name), CORP_CODE_FILE)
         print("고유번호 파일 업데이트 완료.")
@@ -39,10 +38,8 @@ def update_corp_code_file():
         print(f"고유번호 다운로드 실패: {e}")
 
 def get_corp_code_from_file(target_corp_name):
-    """저장된 XML 파일에서 고유번호 검색"""
     if not os.path.exists(CORP_CODE_FILE):
         return None
-    
     try:
         tree = ET.parse(CORP_CODE_FILE)
         root = tree.getroot()
@@ -53,9 +50,56 @@ def get_corp_code_from_file(target_corp_name):
         print(f"XML 파싱 에러: {e}")
     return None
 
-# --- 2. 공시 검색 ---
+# --- 2. 공시 본문 추출 (추가된 기능) ---
+def clean_html_for_ai(html_content):
+    """HTML/XML 태그 제거 및 텍스트 정제"""
+    try:
+        soup = BeautifulSoup(html_content, 'lxml')
+        
+        # 불필요한 태그 제거
+        for script in soup(["script", "style", "head", "meta", "noscript"]):
+            script.extract()
+            
+        # 텍스트 추출 (줄바꿈 보존)
+        text = soup.get_text(separator="\n\n")
+        
+        # 공백 정리
+        lines = (line.strip() for line in text.splitlines())
+        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+        text = '\n'.join(chunk for chunk in chunks if chunk)
+        
+        return text
+    except Exception as e:
+        return f"텍스트 정제 중 오류: {e}"
+
+def fetch_and_extract_dart_content(crtfc_key, rcept_no):
+    """DART API에서 공시 원문(XML) 다운로드 및 텍스트 추출"""
+    api_url = "https://opendart.fss.or.kr/api/document.xml"
+    params = {'crtfc_key': crtfc_key, 'rcept_no': rcept_no}
+
+    try:
+        response = requests.get(api_url, params=params)
+        response.raise_for_status()
+
+        with zipfile.ZipFile(io.BytesIO(response.content)) as z:
+            # .xml 파일 찾기 (보통 최상위 혹은 첫 번째 파일)
+            file_list = z.namelist()
+            xml_filename = next((f for f in file_list if f.endswith('.xml')), None)
+            
+            if not xml_filename:
+                # xml이 없으면 첫 번째 파일 시도
+                xml_filename = file_list[0]
+
+            with z.open(xml_filename) as f:
+                xml_content = f.read().decode('utf-8')
+
+        return clean_html_for_ai(xml_content)
+
+    except Exception as e:
+        return f"본문 가져오기 실패: {e}"
+
+# --- 3. 공시 검색 및 AI 분석 ---
 def get_recent_filings(corp_code):
-    """최근 7일간 공시 검색"""
     dt_end = datetime.now()
     dt_start = dt_end - relativedelta(days=7)
     
@@ -73,34 +117,45 @@ def get_recent_filings(corp_code):
     
     if data.get('status') == '000':
         df = pd.DataFrame(data.get('list', []))
-        # 접수번호(rcept_no)는 고유 ID이므로 이를 기준으로 정렬 및 비교
         df['rcept_dt'] = pd.to_datetime(df['rcept_dt'])
-        df = df.sort_values(by='rcept_no', ascending=True) # 과거 -> 최신 순
+        df = df.sort_values(by='rcept_no', ascending=True)
         return df
     return pd.DataFrame()
 
-# --- 3. AI 분석 ---
 def analyze_content(row):
-    """
-    공시 제목과 유형을 기반으로 AI 분석 수행
-    (실제 본문 스크래핑은 복잡도가 높아 메타데이터와 링크 기반 분석으로 대체)
-    """
+    """공시 본문을 가져와 AI에게 분석 요청"""
     client = OpenAI(
         base_url="https://openrouter.ai/api/v1",
         api_key=OPENROUTER_API_KEY,
     )
     
-    # 분석할 텍스트 구성
+    # 1. 본문 텍스트 추출
+    raw_content = fetch_and_extract_dart_content(DART_API_KEY, row['rcept_no'])
+    
+    # 2. 텍스트 길이 제한 (AI 모델의 Context Window 고려, 약 15,000자 제한)
+    max_length = 15000
+    if len(raw_content) > max_length:
+        content_to_analyze = raw_content[:max_length] + "\n...(내용이 너무 길어 생략됨)"
+    else:
+        content_to_analyze = raw_content
+
+    # 3. 프롬프트 구성
     link = f"http://dart.fss.or.kr/dsaf001/main.do?rcpNo={row['rcept_no']}"
+    
     prompt_text = (
-        f"공시 제목: {row['report_nm']}\n"
+        f"[공시 정보]\n"
+        f"제목: {row['report_nm']}\n"
         f"회사명: {row['corp_name']}\n"
         f"제출인: {row['flr_nm']}\n"
-        f"접수일자: {row['rcept_dt']}\n"
-        f"공시 링크: {link}\n\n"
-        "위 정보를 바탕으로 이 공시가 투자자에게 어떤 의미가 있는지, "
-        "호재(Positive)/악재(Negative)/중립(Neutral) 중 무엇인지 판단하고 "
-        "핵심 내용을 3줄로 요약해줘."
+        f"링크: {link}\n\n"
+        f"[공시 본문 내용 (일부 발췌)]\n"
+        f"{content_to_analyze}\n\n"
+        f"[요청 사항]\n"
+        "당신은 주식 시장 금융 전문가입니다. 위 공시 내용을 분석하여 다음을 수행하세요:\n"
+        "1. 이 공시의 핵심 내용을 3줄로 명확하게 요약하세요.\n"
+        "2. 이 내용이 주가에 미칠 영향(호재/악재/중립)을 판단하고 그 이유를 한 문장으로 설명하세요.\n"
+        "3. 투자자가 유의해야 할 리스크나 특이사항이 있다면 언급하세요.\n"
+        "답변은 한국어로 작성하세요."
     )
 
     try:
@@ -108,7 +163,7 @@ def analyze_content(row):
             extra_headers={"HTTP-Referer": "https://github.com", "X-Title": "DartBot"},
             model="xiaomi/mimo-v2-flash:free",
             messages=[
-                {"role": "system", "content": "당신은 주식 시장 전문가입니다. 한국어로 답변하세요."},
+                {"role": "system", "content": "핵심만 간결하게 전달하는 금융 전문가입니다."},
                 {"role": "user", "content": prompt_text}
             ]
         )
@@ -122,16 +177,14 @@ def send_telegram(message):
     payload = {'chat_id': TELEGRAM_CHAT_ID, 'text': message, 'parse_mode': 'Markdown'}
     requests.post(url, data=payload)
 
-# --- 메인 로직 ---
+# --- 메인 실행부 ---
 def main():
-    # 1. 이전 상태 로드
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, 'r', encoding='utf-8') as f:
             state = json.load(f)
     else:
         state = {}
 
-    # 2. 감시 대상 회사 로드
     if not os.path.exists(COMPANIES_FILE):
         print("회사 목록 파일이 없습니다.")
         return
@@ -139,64 +192,49 @@ def main():
     with open(COMPANIES_FILE, 'r', encoding='utf-8') as f:
         companies = [line.strip() for line in f if line.strip()]
 
-    # 3. 각 회사별 공시 확인
     updated_state = state.copy()
     
     for corp_name in companies:
         print(f"[{corp_name}] 검색 시작...")
         
-        # 고유번호 찾기
         code = get_corp_code_from_file(corp_name)
         if not code:
-            print(f" -> 고유번호를 찾을 수 없음. (refresh 필요 가능성)")
+            print(f" -> 고유번호 없음.")
             continue
             
-        # 최신 공시 가져오기
         df = get_recent_filings(code)
         if df.empty:
             continue
             
-        # 마지막으로 확인한 공시 번호 (없으면 0)
         last_rcept_no = state.get(corp_name, "00000000000000")
-        
-        # 새로운 공시 필터링 (접수번호가 저장된 것보다 큰 경우만)
         new_filings = df[df['rcept_no'] > last_rcept_no]
         
         if new_filings.empty:
             print(" -> 새로운 공시 없음")
             continue
             
-        # 새로운 공시 처리
         for _, row in new_filings.iterrows():
-            print(f" -> 새 공시 발견: {row['report_nm']}")
+            print(f" -> 새 공시 분석 중: {row['report_nm']}")
             
-            # AI 분석
             ai_result = analyze_content(row)
             
-            # 메시지 작성
             msg = (
                 f"🚨 *DART 알림: {row['corp_name']}*\n"
                 f"📄 {row['report_nm']}\n"
                 f"🔗 [링크 보기](http://dart.fss.or.kr/dsaf001/main.do?rcpNo={row['rcept_no']})\n\n"
-                f"🤖 *AI 요약:*\n{ai_result}"
+                f"📝 *AI 분석 보고서:*\n{ai_result}"
             )
             
-            # 텔레그램 전송
             send_telegram(msg)
-            
-            # 상태 업데이트 (가장 최근 번호로)
             updated_state[corp_name] = row['rcept_no']
 
-    # 4. 상태 저장
     with open(STATE_FILE, 'w', encoding='utf-8') as f:
         json.dump(updated_state, f, ensure_ascii=False, indent=4)
 
 if __name__ == "__main__":
-    # 고유번호 파일이 없으면 강제 다운로드 (최초 실행 시)
     if not os.path.exists(CORP_CODE_FILE):
         update_corp_code_file()
         
-    # 메인 실행 시 인자(argument)에 따라 동작 구분 가능
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == 'refresh':
         update_corp_code_file()
