@@ -3,7 +3,7 @@ name: Monthly Code Refresh
 on:
   schedule:
     - cron: '0 0 1 * *'     # 매월 1일 자정 실행
-  workflow_dispatch:
+  workflow_dispatch:        # 수동 실행 버튼
 
 permissions:
   contents: write
@@ -21,8 +21,9 @@ jobs:
         with:
           python-version: '3.9'
           
+      # [수정된 부분] requests만 설치하는 대신 requirements.txt 전체를 설치합니다.
       - name: Install dependencies
-        run: pip install requests
+        run: pip install -r requirements.txt
 
       - name: Run Refresh Script
         env:
@@ -35,4 +36,5 @@ jobs:
           git config --global user.name "GitHub Action Bot"
           git config --global user.email "action@github.com"
           git add data/corp_codes.xml
+          # 변경사항이 없으면 에러 없이 넘어가고, 있으면 커밋
           git diff --quiet && git diff --staged --quiet || (git commit -m "Refresh corp codes" && git push)
