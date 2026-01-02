@@ -3,10 +3,10 @@ name: DART Monitor
 on:
   schedule:
     - cron: '*/30 * * * *'  # 30분마다 실행
-  workflow_dispatch:        # 수동 실행 가능
+  workflow_dispatch:
 
 permissions:
-  contents: write           # 저장소에 파일(json)을 쓰기 위해 권한 필요
+  contents: write           # keepalive 액션도 쓰기 권한이 필요합니다
 
 jobs:
   check-dart:
@@ -39,5 +39,8 @@ jobs:
           git config --global user.name "GitHub Action Bot"
           git config --global user.email "action@github.com"
           git add data/latest_filings.json
-          # 변경사항이 있을 때만 커밋
           git diff --quiet && git diff --staged --quiet || (git commit -m "Update filing state" && git push)
+
+      # [추가된 부분] 60일 비활성화 방지용 액션
+      - name: Keepalive Workflow
+        uses: gautamkrishnar/keepalive-workflow@v1
