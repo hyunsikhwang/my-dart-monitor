@@ -2,7 +2,15 @@ name: DART Monitor
 
 on:
   schedule:
-    - cron: '*/30 * * * *'  # 30분마다 실행
+    # GitHub Actions는 UTC를 기준(KST -9시간)으로 합니다.
+    # 1. 월~금 오전 07:30 KST (UTC: 일~목 22:30)
+    - cron: '30 22 * * 0-4'
+    # 2. 월~금 오전 08:00 ~ 08:30 KST (UTC: 일~목 23:00 ~ 23:30)
+    - cron: '*/30 23 * * 0-4'
+    # 3. 월~금 오전 09:00 ~ 오후 18:30 KST (UTC: 월~금 00:00 ~ 09:30)
+    - cron: '*/30 0-9 * * 1-5'
+    # 4. 월~금 오후 19:00 KST (UTC: 월~금 10:00)
+    - cron: '0 10 * * 1-5'
   workflow_dispatch:
 
 permissions:
@@ -24,6 +32,10 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
+
+      # (선택 사항) 공휴일 체크 로직을 Python 코드 내에 추가하거나
+      # 여기에 bash 스크립트로 공휴일 API를 호출하여 exit 하는 단계를 추가할 수 있습니다.
+      # 현재 설정만으로도 주말 및 업무 시간 외 실행은 차단됩니다.
 
       - name: Run DART Monitor
         env:
