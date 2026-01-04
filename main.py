@@ -50,28 +50,20 @@ def get_corp_code_from_file(target_corp_name):
         print(f"XML 파싱 에러: {e}")
     return None
 
-# --- 2. 공시 본문 추출 (추가된 기능) ---
 def clean_html_for_ai(html_content):
     """HTML/XML 태그 제거 및 텍스트 정제"""
     try:
-        """
-        HTML/XML 태그를 제거하고 AI가 구조를 파악하기 쉽게 텍스트를 정리합니다.
-        """
-        soup = BeautifulSoup(html_content, 'lxml') # lxml 파서가 빠르고 강력함
+        # [수정] 'lxml' 대신 'xml' 파서 사용 (DART 문서는 XML 형식이므로 필수)
+        soup = BeautifulSoup(html_content, 'xml') 
 
-        # 1. 불필요한 태그 제거 (Script, Style, 숨겨진 요소 등)
+        # 1. 불필요한 태그 제거
         for script in soup(["script", "style", "head", "meta", "noscript"]):
             script.extract()
 
-        # 2. 표(Table) 처리 - AI에게 표는 매우 중요하므로 구조를 보존해야 함
-        # 간단히 텍스트를 탭이나 파이프(|)로 구분하여 Markdown 표처럼 보이게 변환 시도
-        # (복잡한 표는 별도 로직이 필요할 수 있으나, 일반적인 텍스트 추출 방식 적용)
-
-        # 3. 텍스트 추출 (get_text 사용 시 separator를 줄바꿈으로 지정)
+        # 2. 텍스트 추출
         text = soup.get_text(separator="\n\n")
 
-        # 4. 공백 정리 (연속된 줄바꿈 제거 등)
-        # 문장 사이의 과도한 공백은 Token 낭비의 주범입니다.
+        # 3. 공백 정리
         lines = (line.strip() for line in text.splitlines())
         chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
         text = '\n'.join(chunk for chunk in chunks if chunk)
@@ -160,7 +152,11 @@ def analyze_content(row):
     # 1. 본문 텍스트 추출
     raw_content = fetch_and_extract_dart_content(DART_API_KEY, row['rcept_no'])
     
-    # 2. 텍스트 길이 제한 (AI 모델의 Context Window 고려, 약 15,000자 제한)
+    # [방어 로직] 본문이 너무 짧거나(오류 메시지 등) 비어 있으면 분석 중단
+    if not raw_content or len(raw_content) < 50:
+        return "⚠️ 공시 본문이 너무 짧거나 비어있어 분석할 수 없습니다. (첨부파일 위주 공시일 가능성)"
+
+    # 2. 텍스트 길이 제한
     max_length = 15000
     if len(raw_content) > max_length:
         content_to_analyze = raw_content[:max_length] + "\n...(내용이 너무 길어 생략됨)"
@@ -195,7 +191,13 @@ def analyze_content(row):
                 {"role": "user", "content": prompt_text}
             ]
         )
-        return completion.choices[0].message.content
+        
+        # [수정] 응답 객체 확인 (NoneType 에러 방지)
+        if completion and completion.choices:
+            return completion.choices[0].message.content
+        else:
+            return "AI 모델이 응답을 반환하지 않았습니다."
+            
     except Exception as e:
         return f"AI 분석 실패: {e}"
 
