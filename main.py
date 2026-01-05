@@ -181,6 +181,8 @@ def analyze_content(row):
 답변은 한국어로 작성하세요."""
     )
 
+    print(content_to_analyze)
+
     try:
         completion = client.chat.completions.create(
             extra_headers={"HTTP-Referer": "https://github.com", "X-Title": "DartBot"},
@@ -193,6 +195,7 @@ def analyze_content(row):
         
         # [수정] 응답 객체 확인 (NoneType 에러 방지)
         if completion and completion.choices:
+            print(completion.choices[0].message.content)
             return completion.choices[0].message.content
         else:
             return "AI 모델이 응답을 반환하지 않았습니다."
