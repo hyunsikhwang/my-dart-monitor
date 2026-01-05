@@ -53,8 +53,7 @@ def get_corp_code_from_file(target_corp_name):
 def clean_html_for_ai(html_content):
     """HTML/XML 태그 제거 및 텍스트 정제"""
     try:
-        # [수정] 'lxml' 대신 'xml' 파서 사용 (DART 문서는 XML 형식이므로 필수)
-        soup = BeautifulSoup(html_content, 'xml') 
+        soup = BeautifulSoup(html_content, 'lxml') 
 
         # 1. 불필요한 태그 제거
         for script in soup(["script", "style", "head", "meta", "noscript"]):
