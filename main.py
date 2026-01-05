@@ -181,7 +181,7 @@ def analyze_content(row):
 답변은 한국어로 작성하세요."""
     )
 
-    print(content_to_analyze)
+    # print(content_to_analyze)
 
     try:
         completion = client.chat.completions.create(
@@ -195,7 +195,7 @@ def analyze_content(row):
         
         # [수정] 응답 객체 확인 (NoneType 에러 방지)
         if completion and completion.choices:
-            print(completion.choices[0].message.content)
+            # print(completion.choices[0].message.content)
             return completion.choices[0].message.content
         else:
             return "AI 모델이 응답을 반환하지 않았습니다."
@@ -207,7 +207,7 @@ def analyze_content(row):
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {'chat_id': TELEGRAM_CHAT_ID, 'text': message, 'parse_mode': 'Markdown'}
-    print(url, payload)
+    # print(url, payload)
     requests.post(url, data=payload)
 
 # --- 메인 실행부 ---
