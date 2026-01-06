@@ -172,10 +172,11 @@ def analyze_content(row):
     
     # [방어 로직] 본문이 너무 짧거나(오류 메시지 등) 비어 있으면 분석 중단
     if not raw_content or len(raw_content) < 50:
+        print(raw_content)
         return "⚠️ 공시 본문이 너무 짧거나 비어있어 분석할 수 없습니다. (첨부파일 위주 공시일 가능성)"
 
     # 2. 텍스트 길이 제한
-    max_length = 15000
+    max_length = 100000
     if len(raw_content) > max_length:
         content_to_analyze = raw_content[:max_length] + "\n...(내용이 너무 길어 생략됨)"
     else:
@@ -190,14 +191,8 @@ def analyze_content(row):
         f"회사명: {row['corp_name']}\n"
         f"제출인: {row['flr_nm']}\n"
         f"링크: {link}\n\n"
-        f"[공시 본문 내용 (일부 발췌)]\n"
+        f"공시 본문 내용:\n"
         f"{content_to_analyze}\n\n"
-        f"""[요청 사항]\n"
-당신은 주식 시장 금융 전문가입니다. 위 공시 내용을 분석하여 다음을 수행하세요:
-1. 이 공시의 핵심 내용을 3개의 bullet point로 명확하게 요약하세요.
-2. 이 내용이 주가에 미칠 영향(호재/악재/중립 중 택 1)을 판단하고 그 이유를 한 문장으로 설명하세요.
-3. 투자자가 유의해야 할 리스크나 특이사항이 있다면 언급하세요.
-답변은 한국어로 작성하세요."""
     )
 
     # print(content_to_analyze)
@@ -207,7 +202,11 @@ def analyze_content(row):
             extra_headers={"HTTP-Referer": "https://github.com", "X-Title": "DartBot"},
             model="xiaomi/mimo-v2-flash:free",
             messages=[
-                {"role": "system", "content": "핵심만 간결하게 전달하는 금융 전문가입니다."},
+                {"role": "system", "content": "당신은 주식 시장 금융 전문가입니다. 위 공시 내용을 분석하여 다음을 수행하세요:"
+                "1. 이 공시의 핵심 내용을 3개의 bullet point로 명확하게 요약하세요."
+                "2. 이 내용이 주가에 미칠 영향(호재/악재/중립 중 택 1)을 판단하고 그 이유를 한 문장으로 설명하세요."
+                "3. 투자자가 유의해야 할 리스크나 특이사항이 있다면 언급하세요."
+                "4. 답변은 한국어로 작성하세요."},
                 {"role": "user", "content": prompt_text}
             ]
         )
