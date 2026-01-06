@@ -38,14 +38,33 @@ def update_corp_code_file():
         print(f"고유번호 다운로드 실패: {e}")
 
 def get_corp_code_from_file(target_corp_name):
+    """
+    회사명을 기반으로 고유번호(corp_code)를 찾습니다.
+    중복된 이름이 있을 경우, 상장회사(stock_code가 있는 경우)를 우선적으로 반환합니다.
+    """
     if not os.path.exists(CORP_CODE_FILE):
         return None
     try:
         tree = ET.parse(CORP_CODE_FILE)
         root = tree.getroot()
+        
+        # 'list' 요소를 순회하며 조건에 맞는 회사 검색
         for corp_data in root.findall('list'):
-            if corp_data.find('corp_name').text.strip() == target_corp_name:
-                return corp_data.find('corp_code').text.strip()
+            # 1. 회사명 일치 확인 (공백 제거 후 비교)
+            current_corp_name = corp_data.find('corp_name').text.strip()
+            
+            if current_corp_name == target_corp_name:
+                # 2. 상장 여부 확인 (stock_code 태그 내용 확인)
+                stock_code_elem = corp_data.find('stock_code')
+                
+                if stock_code_elem is not None and stock_code_elem.text:
+                    # stock_code의 공백 및 blank를 제거
+                    cleaned_stock_code = stock_code_elem.text.strip()
+                    
+                    # 정제된 stock_code가 빈 문자열이 아닌 경우(상장사)만 corp_code 반환
+                    if cleaned_stock_code:
+                        return corp_data.find('corp_code').text.strip()
+                        
     except Exception as e:
         print(f"XML 파싱 에러: {e}")
     return None
