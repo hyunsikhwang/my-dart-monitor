@@ -202,18 +202,25 @@ def analyze_content(row):
             extra_headers={"HTTP-Referer": "https://github.com", "X-Title": "DartBot"},
             model="xiaomi/mimo-v2-flash:free",
             messages=[
-                {"role": "system", "content": "당신은 주식 시장 금융 전문가입니다. 위 공시 내용을 분석하여 다음을 수행하세요:"
-                "1. 이 공시의 핵심 내용을 3개의 bullet point로 명확하게 요약하세요."
-                "2. 이 내용이 주가에 미칠 영향(호재/악재/중립 중 택 1)을 판단하고 그 이유를 한 문장으로 설명하세요."
-                "3. 투자자가 유의해야 할 리스크나 특이사항이 있다면 언급하세요."
-                "4. 답변은 한국어로 작성하세요."},
-                {"role": "user", "content": prompt_text}
-            ]
+            {
+                "role": "system",
+                "content": (
+                    "당신은 주식 시장 금융 전문가입니다. 위 공시 내용을 분석하여 다음을 수행하세요:"
+                    "1. 이 공시의 핵심 내용을 3개의 bullet point로 명확하게 요약하세요."
+                    "2. 이 내용이 주가에 미칠 영향(호재/악재/중립 중 택 1)을 판단하고 그 이유를 한 문장으로 설명하세요."
+                    "3. 투자자가 유의해야 할 리스크나 특이사항이 있다면 언급하세요."
+                    "ㅛ. 답변은 한국어로 작성하세요."
+                )
+            },
+            {
+                "role": "user",
+                "content": prompt_text
+            }]
         )
         
         # [수정] 응답 객체 확인 (NoneType 에러 방지)
         if completion and completion.choices:
-            # print(completion.choices[0].message.content)
+            print(completion.choices[0].message.content)
             return completion.choices[0].message.content
         else:
             return "AI 모델이 응답을 반환하지 않았습니다."
