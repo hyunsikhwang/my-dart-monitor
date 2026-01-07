@@ -129,14 +129,9 @@ def fetch_and_extract_dart_content(crtfc_key, rcept_no):
 
         return clean_text
 
-    except requests.exceptions.RequestException as e:
-        return f"❌ 네트워크 오류 발생: {e}"
-    except zipfile.BadZipFile:
-        print(api_url)
-        print(response.text)
-        return "❌ 유효하지 않은 ZIP 파일입니다. API Key나 접수번호를 확인해주세요."
     except Exception as e:
-        return f"❌ 알 수 없는 오류 발생: {e}"
+            # 문자열을 반환하는 대신 예외를 발생시켜 main에서 인지하게 합니다.
+            raise Exception(f"공시 본문 수집 실패 (접수번호 {rcept_no}): {e}")
 
 # --- 3. 공시 검색 및 AI 분석 ---
 def get_recent_filings(corp_code):
@@ -175,7 +170,7 @@ def analyze_content(row):
     # [방어 로직] 본문이 너무 짧거나(오류 메시지 등) 비어 있으면 분석 중단
     if not raw_content or len(raw_content) < 50:
         print(raw_content)
-        return "⚠️ 공시 본문이 너무 짧거나 비어있어 분석할 수 없습니다. (첨부파일 위주 공시일 가능성)"
+        raise Exception(f"분석 가능한 본문 내용이 부족함 (접수번호 {row['rcept_no']})")
 
     # 2. 텍스트 길이 제한
     max_length = 100000
@@ -222,7 +217,7 @@ def analyze_content(row):
         
         # [수정] 응답 객체 확인 (NoneType 에러 방지)
         if completion and completion.choices:
-            print(completion.choices[0].message.content)
+            # print(completion.choices[0].message.content)
             return completion.choices[0].message.content
         else:
             return "AI 모델이 응답을 반환하지 않았습니다."
@@ -274,19 +269,24 @@ def main():
             continue
             
         for _, row in new_filings.iterrows():
-            print(f" -> 새 공시 분석 중: {row['report_nm']}")
-            
-            ai_result = analyze_content(row)
-            
-            msg = (
-                f"🚨 *DART 알림: {row['corp_name']}*\n"
-                f"📄 {row['report_nm']}\n"
-                f"🔗 [링크 보기](http://dart.fss.or.kr/dsaf001/main.do?rcpNo={row['rcept_no']})\n\n"
-                f"📝 *AI 분석 보고서:*\n{ai_result}"
-            )
-            
-            send_telegram(msg)
-            updated_state[corp_name] = row['rcept_no']
+            try:
+                print(f" -> 새 공시 분석 중: {row['report_nm']}")
+                
+                ai_result = analyze_content(row)
+                
+                msg = (
+                    f"🚨 *DART 알림: {row['corp_name']}*\n"
+                    f"📄 {row['report_nm']}\n"
+                    f"🔗 [링크 보기](http://dart.fss.or.kr/dsaf001/main.do?rcpNo={row['rcept_no']})\n\n"
+                    f"📝 *AI 분석 보고서:*\n{ai_result}"
+                )
+                
+                send_telegram(msg)
+                updated_state[corp_name] = row['rcept_no']
+                print(f" ✅ 성공: {row['rcept_no']}")
+            except Exception as e:
+                print(f" ❌ 오류 발생(스킵): {e}")
+                break
 
     with open(STATE_FILE, 'w', encoding='utf-8') as f:
         json.dump(updated_state, f, ensure_ascii=False, indent=4)
