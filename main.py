@@ -132,6 +132,8 @@ def fetch_and_extract_dart_content(crtfc_key, rcept_no):
     except requests.exceptions.RequestException as e:
         return f"❌ 네트워크 오류 발생: {e}"
     except zipfile.BadZipFile:
+        print(api_url)
+        print(response.text)
         return "❌ 유효하지 않은 ZIP 파일입니다. API Key나 접수번호를 확인해주세요."
     except Exception as e:
         return f"❌ 알 수 없는 오류 발생: {e}"
