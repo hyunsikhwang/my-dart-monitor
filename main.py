@@ -298,23 +298,24 @@ def main():
         for _, row in new_filings.iterrows():
             try:
                 print(f" -> 새 공시 분석 중: {row['report_nm']}")
-                
+
                 ai_result = analyze_content(row)
-                
+
                 msg = (
                     f"🚨 *DART 알림: {row['corp_name']}*\n"
                     f"📄 {row['report_nm']}\n"
                     f"🔗 [링크 보기](http://dart.fss.or.kr/dsaf001/main.do?rcpNo={row['rcept_no']})\n\n"
                     f"📝 *AI 분석 보고서:*\n{ai_result}"
                 )
-                
+
                 send_telegram(msg)
                 updated_state[corp_name] = row['rcept_no']
                 print(f" ✅ 성공: {row['rcept_no']}")
             except Exception as e:
                 print(f" ❌ 오류 발생(스킵): {e}")
                 send_telegram(f"⚠️ *DART 알림 오류: {corp_name}*\n{e}")
-                break
+                updated_state[corp_name] = row['rcept_no']
+                continue
 
     with open(STATE_FILE, 'w', encoding='utf-8') as f:
         json.dump(updated_state, f, ensure_ascii=False, indent=4)
