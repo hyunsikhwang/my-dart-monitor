@@ -111,16 +111,24 @@ def fetch_and_extract_dart_content(crtfc_key, rcept_no):
 
         # 3. ZIP 파일 처리 (디스크 저장 없이 메모리에서 바로 해제)
         # DART document.xml API는 항상 ZIP 파일을 반환합니다.
-        with zipfile.ZipFile(io.BytesIO(response.content)) as z:
-            # 압축 파일 내의 파일 목록 확인
-            file_list = z.namelist()
-            print(f"📦 압축 파일 내 파일 목록: {file_list}")
+        try:
+            # ZIP 파일 검증
+            with zipfile.ZipFile(io.BytesIO(response.content)) as z:
+                # 압축 파일 내의 파일 목록 확인
+                file_list = z.namelist()
+                print(f"📦 압축 파일 내 파일 목록: {file_list}")
 
-            # 보통 첫 번째 파일이 주된 공시 문서입니다. (혹은 .xml로 끝나는 파일 찾기)
-            xml_filename = [f for f in file_list if f.endswith('.xml')][0]
+                # 보통 첫 번째 파일이 주된 공시 문서입니다. (혹은 .xml로 끝나는 파일 찾기)
+                xml_filename = [f for f in file_list if f.endswith('.xml')][0]
 
-            with z.open(xml_filename) as f:
-                xml_content = f.read().decode('utf-8') # 한글 디코딩
+                with z.open(xml_filename) as f:
+                    xml_content = f.read().decode('utf-8') # 한글 디코딩
+
+        except zipfile.BadZipFile:
+            # ZIP 파일 검증 실패 시 응답 내용 출력 (디버깅용)
+            response_text = response.content[:500].decode('utf-8', errors='replace')
+            print(f"⚠️ 응답이 ZIP 파일이 아닙니다. 응답 내용(첫 500자): {response_text}")
+            raise Exception(f"공시 본문 수집 실패 (접수번호 {rcept_no}): 응답이 ZIP 파일이 아닙니다. 응답 내용: {response_text}")
 
         print("✅ 다운로드 및 압축 해제 완료. 텍스트 정제 시작...")
 
@@ -130,8 +138,8 @@ def fetch_and_extract_dart_content(crtfc_key, rcept_no):
         return clean_text
 
     except Exception as e:
-            # 문자열을 반환하는 대신 예외를 발생시켜 main에서 인지하게 합니다.
-            raise Exception(f"공시 본문 수집 실패 (접수번호 {rcept_no}): {e}")
+        # 문자열을 반환하는 대신 예외를 발생시켜 main에서 인지하게 합니다.
+        raise Exception(f"공시 본문 수집 실패 (접수번호 {rcept_no}): {e}")
 
 # --- 3. 공시 검색 및 AI 분석 ---
 def get_recent_filings(corp_code):
