@@ -124,18 +124,32 @@ def fetch_and_extract_dart_content(crtfc_key, rcept_no):
                 with z.open(xml_filename) as f:
                     xml_content = f.read().decode('utf-8') # 한글 디코딩
 
+            print("✅ 다운로드 및 압축 해제 완료. 텍스트 정제 시작...")
+
+            # 4. 텍스트 정제 (AI Input 최적화)
+            clean_text = clean_html_for_ai(xml_content)
+
+            return clean_text
+
         except zipfile.BadZipFile:
             # ZIP 파일 검증 실패 시 응답 내용 출력 (디버깅용)
             response_text = response.content[:500].decode('utf-8', errors='replace')
             print(f"⚠️ 응답이 ZIP 파일이 아닙니다. 응답 내용(첫 500자): {response_text}")
-            raise Exception(f"공시 본문 수집 실패 (접수번호 {rcept_no}): 응답이 ZIP 파일이 아닙니다. 응답 내용: {response_text}")
 
-        print("✅ 다운로드 및 압축 해제 완료. 텍스트 정제 시작...")
+            # DART API 오류 응답 파싱 시도
+            try:
+                from xml.etree.ElementTree import fromstring
+                error_root = fromstring(response.content)
+                status = error_root.find('status')
+                message = error_root.find('message')
+                if status is not None and message is not None:
+                    error_msg = f"DART API 오류 ({status.text}): {message.text}"
+                else:
+                    error_msg = "유효하지 않은 ZIP 파일입니다. API Key나 접수번호를 확인해주세요."
+            except Exception:
+                error_msg = "유효하지 않은 ZIP 파일입니다. API Key나 접수번호를 확인해주세요."
 
-        # 4. 텍스트 정제 (AI Input 최적화)
-        clean_text = clean_html_for_ai(xml_content)
-
-        return clean_text
+            raise Exception(f"공시 본문 수집 실패 (접수번호 {rcept_no}): {error_msg}")
 
     except Exception as e:
         # 문자열을 반환하는 대신 예외를 발생시켜 main에서 인지하게 합니다.
