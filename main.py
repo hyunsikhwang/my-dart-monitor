@@ -291,6 +291,7 @@ def main():
                 print(f" ✅ 성공: {row['rcept_no']}")
             except Exception as e:
                 print(f" ❌ 오류 발생(스킵): {e}")
+                send_telegram(f"⚠️ *DART 알림 오류: {corp_name}*\n{e}")
                 break
 
     with open(STATE_FILE, 'w', encoding='utf-8') as f:
