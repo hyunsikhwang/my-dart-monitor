@@ -3,12 +3,16 @@ import json
 import requests
 import zipfile
 import io
+import time
+import random
 import pandas as pd
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from openai import OpenAI
 from bs4 import BeautifulSoup  # 추가된 라이브러리
+from enum import Enum
+from typing import Optional, Tuple
 
 # --- 설정값 (GitHub Secrets) ---
 DART_API_KEY = os.environ.get("DART_API_KEY")
@@ -21,6 +25,103 @@ DATA_DIR = "data"
 COMPANIES_FILE = os.path.join(DATA_DIR, "companies.txt")
 CORP_CODE_FILE = os.path.join(DATA_DIR, "corp_codes.xml")
 STATE_FILE = os.path.join(DATA_DIR, "latest_filings.json")
+
+# --- 오류 분류 Enum ---
+class DARTErrorType(Enum):
+    """DART API 오류 분류"""
+    NETWORK_ERROR = "network_error"          # 네트워크 연결 오류
+    API_LIMIT_EXCEEDED = "api_limit_exceeded" # API 호출 제한 초과
+    FILE_NOT_FOUND = "file_not_found"        # 파일 존재하지 않음 (상태 코드 014)
+    INVALID_API_KEY = "invalid_api_key"      # 유효하지 않은 API 키
+    ZIP_PROCESSING_ERROR = "zip_error"       # ZIP 파일 처리 오류
+    UNKNOWN_ERROR = "unknown_error"          # 알 수 없는 오류
+    TEMPORARY_ERROR = "temporary_error"      # 임시 오류 (재시도 가능)
+
+# --- 재시도 로직 유틸리티 ---
+def classify_dart_error(error_msg: str, response_content: bytes = None) -> DARTErrorType:
+    """
+    DART API 오류 메시지를 분석하여 오류 유형을 분류합니다.
+    """
+    error_msg_lower = error_msg.lower()
+
+    # 네트워크 관련 오류
+    if "connection" in error_msg_lower or "timeout" in error_msg_lower:
+        return DARTErrorType.NETWORK_ERROR
+
+    # API 제한 초과
+    if "limit" in error_msg_lower or "quota" in error_msg_lower or "rate" in error_msg_lower:
+        return DARTErrorType.API_LIMIT_EXCEEDED
+
+    # 파일 존재하지 않음 (상태 코드 014)
+    if "014" in error_msg or "파일이 존재하지 않습니다" in error_msg:
+        return DARTErrorType.FILE_NOT_FOUND
+
+    # 유효하지 않은 API 키
+    if "010" in error_msg or "인증키" in error_msg or "api key" in error_msg:
+        return DARTErrorType.INVALID_API_KEY
+
+    # ZIP 처리 오류
+    if "zip" in error_msg_lower or "badzipfile" in error_msg_lower:
+        return DARTErrorType.ZIP_PROCESSING_ERROR
+
+    # 임시 오류 (재시도 가능)
+    if response_content and b"014" in response_content:
+        return DARTErrorType.TEMPORARY_ERROR
+
+    return DARTErrorType.UNKNOWN_ERROR
+
+def should_retry_error(error_type: DARTErrorType, retry_count: int) -> bool:
+    """
+    주어진 오류 유형과 재시도 횟수에 따라 재시도 여부를 결정합니다.
+    """
+    # 절대 재시도하지 않을 오류
+    non_retryable_errors = [
+        DARTErrorType.INVALID_API_KEY,
+        DARTErrorType.UNKNOWN_ERROR
+    ]
+
+    if error_type in non_retryable_errors:
+        return False
+
+    # 최대 재시도 횟수 제한 (3회)
+    if retry_count >= 3:
+        return False
+
+    return True
+
+def exponential_backoff_retry(retry_count: int) -> float:
+    """
+    지수 백오프 알고리즘을 사용하여 재시도 대기 시간을 계산합니다.
+    기본 대기 시간: 1초, 최대 대기 시간: 8초
+    """
+    base_delay = 1.0
+    max_delay = 8.0
+
+    # 지수 백오프 계산: min(base * 2^retry_count, max_delay)
+    delay = min(base_delay * (2 ** retry_count), max_delay)
+
+    # 약간의 랜덤 지터 추가 (0.5~1.5배)
+    jitter = random.uniform(0.5, 1.5)
+    final_delay = delay * jitter
+
+    return final_delay
+
+def log_error_with_context(error_msg: str, rcept_no: str, retry_count: int, error_type: DARTErrorType):
+    """
+    오류 정보를 상세하게 로깅합니다.
+    """
+    error_type_str = error_type.value
+    log_msg = f"❌ 오류 (접수번호: {rcept_no}, 재시도: {retry_count}/{3}, 유형: {error_type_str}): {error_msg}"
+
+    if error_type == DARTErrorType.FILE_NOT_FOUND:
+        log_msg += " -> 임시 오류로 분류됨 (재시도 예정)"
+    elif error_type == DARTErrorType.TEMPORARY_ERROR:
+        log_msg += " -> 임시 오류 (재시도 예정)"
+    elif not should_retry_error(error_type, retry_count):
+        log_msg += " -> 재시도하지 않음"
+
+    print(log_msg)
+    return log_msg
 
 # --- 1. DART 고유번호 관리 ---
 def update_corp_code_file():
@@ -90,9 +191,10 @@ def clean_html_for_ai(html_content):
     except Exception as e:
         return f"텍스트 정제 중 오류: {e}"
 
-def fetch_and_extract_dart_content(crtfc_key, rcept_no):
+def fetch_and_extract_dart_content(crtfc_key, rcept_no, max_retries: int = 3):
     """
     DART API에서 공시 원문(XML)을 다운로드하여 AI용 텍스트로 정제합니다.
+    재시도 로직과 향상된 오류 처리를 포함합니다.
     """
 
     # 1. API 요청 URL 생성
@@ -102,58 +204,85 @@ def fetch_and_extract_dart_content(crtfc_key, rcept_no):
         'rcept_no': rcept_no
     }
 
-    print(f"🔄 요청 중... (접수번호: {rcept_no})")
+    retry_count = 0
+    last_error = None
+    response_content = None
 
-    try:
-        # 2. 파일 다운로드 (Stream 방식)
-        response = requests.get(api_url, params=params)
-        response.raise_for_status() # 에러 발생 시 중단
-
-        # 3. ZIP 파일 처리 (디스크 저장 없이 메모리에서 바로 해제)
-        # DART document.xml API는 항상 ZIP 파일을 반환합니다.
+    while retry_count <= max_retries:
         try:
-            # ZIP 파일 검증
-            with zipfile.ZipFile(io.BytesIO(response.content)) as z:
-                # 압축 파일 내의 파일 목록 확인
-                file_list = z.namelist()
-                print(f"📦 압축 파일 내 파일 목록: {file_list}")
+            print(f"🔄 요청 중... (접수번호: {rcept_no}, 시도: {retry_count + 1}/{max_retries + 1})")
 
-                # 보통 첫 번째 파일이 주된 공시 문서입니다. (혹은 .xml로 끝나는 파일 찾기)
-                xml_filename = [f for f in file_list if f.endswith('.xml')][0]
+            # 2. 파일 다운로드 (Stream 방식)
+            response = requests.get(api_url, params=params, timeout=30)
+            response_content = response.content
+            response.raise_for_status() # 에러 발생 시 중단
 
-                with z.open(xml_filename) as f:
-                    xml_content = f.read().decode('utf-8') # 한글 디코딩
-
-            print("✅ 다운로드 및 압축 해제 완료. 텍스트 정제 시작...")
-
-            # 4. 텍스트 정제 (AI Input 최적화)
-            clean_text = clean_html_for_ai(xml_content)
-
-            return clean_text
-
-        except zipfile.BadZipFile:
-            # ZIP 파일 검증 실패 시 응답 내용 출력 (디버깅용)
-            response_text = response.content[:500].decode('utf-8', errors='replace')
-            print(f"⚠️ 응답이 ZIP 파일이 아닙니다. 응답 내용(첫 500자): {response_text}")
-
-            # DART API 오류 응답 파싱 시도
+            # 3. ZIP 파일 처리 (디스크 저장 없이 메모리에서 바로 해제)
+            # DART document.xml API는 항상 ZIP 파일을 반환합니다.
             try:
-                from xml.etree.ElementTree import fromstring
-                error_root = fromstring(response.content)
-                status = error_root.find('status')
-                message = error_root.find('message')
-                if status is not None and message is not None:
-                    error_msg = f"DART API 오류 ({status.text}): {message.text}"
-                else:
+                # ZIP 파일 검증
+                with zipfile.ZipFile(io.BytesIO(response.content)) as z:
+                    # 압축 파일 내의 파일 목록 확인
+                    file_list = z.namelist()
+                    print(f"📦 압축 파일 내 파일 목록: {file_list}")
+
+                    # 보통 첫 번째 파일이 주된 공시 문서입니다. (혹은 .xml로 끝나는 파일 찾기)
+                    xml_filename = [f for f in file_list if f.endswith('.xml')][0]
+
+                    with z.open(xml_filename) as f:
+                        xml_content = f.read().decode('utf-8') # 한글 디코딩
+
+                print("✅ 다운로드 및 압축 해제 완료. 텍스트 정제 시작...")
+
+                # 4. 텍스트 정제 (AI Input 최적화)
+                clean_text = clean_html_for_ai(xml_content)
+
+                return clean_text
+
+            except zipfile.BadZipFile:
+                # ZIP 파일 검증 실패 시 응답 내용 출력 (디버깅용)
+                response_text = response.content[:500].decode('utf-8', errors='replace')
+                print(f"⚠️ 응답이 ZIP 파일이 아닙니다. 응답 내용(첫 500자): {response_text}")
+
+                # DART API 오류 응답 파싱 시도
+                try:
+                    from xml.etree.ElementTree import fromstring
+                    error_root = fromstring(response.content)
+                    status = error_root.find('status')
+                    message = error_root.find('message')
+                    if status is not None and message is not None:
+                        error_msg = f"DART API 오류 ({status.text}): {message.text}"
+                    else:
+                        error_msg = "유효하지 않은 ZIP 파일입니다. API Key나 접수번호를 확인해주세요."
+                except Exception:
                     error_msg = "유효하지 않은 ZIP 파일입니다. API Key나 접수번호를 확인해주세요."
-            except Exception:
-                error_msg = "유효하지 않은 ZIP 파일입니다. API Key나 접수번호를 확인해주세요."
 
-            raise Exception(f"공시 본문 수집 실패 (접수번호 {rcept_no}): {error_msg}")
+                raise Exception(f"공시 본문 수집 실패 (접수번호 {rcept_no}): {error_msg}")
 
-    except Exception as e:
-        # 문자열을 반환하는 대신 예외를 발생시켜 main에서 인지하게 합니다.
-        raise Exception(f"공시 본문 수집 실패 (접수번호 {rcept_no}): {e}")
+        except Exception as e:
+            last_error = e
+            error_msg = str(e)
+            error_type = classify_dart_error(error_msg, response_content)
+
+            # 오류 로깅 및 재시도 결정
+            log_error_with_context(error_msg, rcept_no, retry_count, error_type)
+
+            if not should_retry_error(error_type, retry_count):
+                print(f"🛑 최종 실패: {error_msg}")
+                break
+
+            # 지수 백오프 대기
+            delay = exponential_backoff_retry(retry_count)
+            print(f"⏳ {delay:.1f}초 후 재시도...")
+            time.sleep(delay)
+
+            retry_count += 1
+
+    # 모든 재시도 실패 시 최종 예외 발생
+    if last_error:
+        raise Exception(f"공시 본문 수집 실패 (접수번호 {rcept_no}, {max_retries + 1}회 시도 후 실패): {last_error}")
+    else:
+        raise Exception(f"공시 본문 수집 실패 (접수번호 {rcept_no}): 알 수 없는 오류")
 
 # --- 3. 공시 검색 및 AI 분석 ---
 def get_recent_filings(corp_code):
