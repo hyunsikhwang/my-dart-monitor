@@ -83,11 +83,22 @@ def should_retry_error(error_type: DARTErrorType, retry_count: int) -> bool:
     if error_type in non_retryable_errors:
         return False
 
-    # 최대 재시도 횟수 제한 (3회)
-    if retry_count >= 3:
-        return False
+    # FILE_NOT_FOUND 오류의 경우 최대 6회 재시도 (10분 간격)
+    if error_type == DARTErrorType.FILE_NOT_FOUND:
+        if retry_count >= 6:
+            return False
+    else:
+        # 다른 오류의 경우 기존 3회 제한 유지
+        if retry_count >= 3:
+            return False
 
     return True
+
+def fixed_interval_retry(retry_count: int) -> float:
+    """
+    고정 간격(10분)으로 재시도 대기 시간을 반환합니다.
+    """
+    return 10 * 60  # 10분 = 600초
 
 def exponential_backoff_retry(retry_count: int) -> float:
     """
@@ -111,7 +122,10 @@ def log_error_with_context(error_msg: str, rcept_no: str, retry_count: int, erro
     오류 정보를 상세하게 로깅합니다.
     """
     error_type_str = error_type.value
-    log_msg = f"❌ 오류 (접수번호: {rcept_no}, 재시도: {retry_count}/{3}, 유형: {error_type_str}): {error_msg}"
+
+    # 최대 재시도 횟수 결정
+    max_retries = 6 if error_type == DARTErrorType.FILE_NOT_FOUND else 3
+    log_msg = f"❌ 오류 (접수번호: {rcept_no}, 재시도: {retry_count}/{max_retries}, 유형: {error_type_str}): {error_msg}"
 
     if error_type == DARTErrorType.FILE_NOT_FOUND:
         log_msg += " -> 임시 오류로 분류됨 (재시도 예정)"
@@ -269,13 +283,38 @@ def fetch_and_extract_dart_content(crtfc_key, rcept_no, max_retries: int = 3):
 
             if not should_retry_error(error_type, retry_count):
                 print(f"🛑 최종 실패: {error_msg}")
+
+                # FILE_NOT_FOUND 오류의 경우 last_filings.json에 기록
+                if error_type == DARTErrorType.FILE_NOT_FOUND:
+                    # 기존 상태 파일 로드
+                    failed_filings = {}
+                    if os.path.exists(STATE_FILE):
+                        with open(STATE_FILE, 'r', encoding='utf-8') as f:
+                            failed_filings = json.load(f)
+
+                    # 실패한 접수번호 기록 (키: 접수번호, 값: 오류 메시지 및 타임스탬프)
+                    failed_filings[rcept_no] = {
+                        "error": error_msg,
+                        "timestamp": datetime.now().isoformat(),
+                        "retry_count": retry_count
+                    }
+
+                    # 상태 파일 저장
+                    with open(STATE_FILE, 'w', encoding='utf-8') as f:
+                        json.dump(failed_filings, f, ensure_ascii=False, indent=4)
+
+                    print(f"📝 실패한 공시 기록: {rcept_no} (last_filings.json에 저장됨)")
                 break
 
-            # 지수 백오프 대기
-            delay = exponential_backoff_retry(retry_count)
-            print(f"⏳ {delay:.1f}초 후 재시도...")
-            time.sleep(delay)
+            # FILE_NOT_FOUND 오류의 경우 10분 고정 간격, 다른 오류의 경우 지수 백오프
+            if error_type == DARTErrorType.FILE_NOT_FOUND:
+                delay = fixed_interval_retry(retry_count)
+                print(f"⏳ 10분 후 재시도... (시도 {retry_count + 1}/6)")
+            else:
+                delay = exponential_backoff_retry(retry_count)
+                print(f"⏳ {delay:.1f}초 후 재시도...")
 
+            time.sleep(delay)
             retry_count += 1
 
     # 모든 재시도 실패 시 최종 예외 발생
