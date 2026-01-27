@@ -387,7 +387,7 @@ def analyze_content(row):
     try:
         completion = client.chat.completions.create(
             extra_headers={"HTTP-Referer": "https://github.com", "X-Title": "DartBot"},
-            model="xiaomi/mimo-v2-flash:free",
+            model="deepseek/deepseek-r1-0528:free",
             messages=[
             {
                 "role": "system",
