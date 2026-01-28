@@ -387,7 +387,7 @@ def analyze_content(row):
     try:
         completion = client.chat.completions.create(
             extra_headers={"HTTP-Referer": "https://github.com", "X-Title": "DartBot"},
-            model="deepseek/deepseek-r1-0528:free",
+            model="openai/gpt-oss-120b:free",
             messages=[
             {
                 "role": "system",
