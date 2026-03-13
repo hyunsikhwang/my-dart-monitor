@@ -387,7 +387,7 @@ def analyze_content(row):
     try:
         completion = client.chat.completions.create(
             extra_headers={"HTTP-Referer": "https://github.com", "X-Title": "DartBot"},
-            model="nvidia/nemotron-3-nano-30b-a3b:free",
+            model="x-ai/grok-4.1-fast",
             messages=[
             {
                 "role": "system",
