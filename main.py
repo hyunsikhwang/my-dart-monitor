@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import requests
 import zipfile
 import io
@@ -25,6 +26,31 @@ DATA_DIR = "data"
 COMPANIES_FILE = os.path.join(DATA_DIR, "companies.txt")
 CORP_CODE_FILE = os.path.join(DATA_DIR, "corp_codes.xml")
 STATE_FILE = os.path.join(DATA_DIR, "latest_filings.json")
+EXCLUDED_REPORT_PATTERNS_FILE = os.path.join(DATA_DIR, "excluded_report_patterns.txt")
+
+
+def load_excluded_report_patterns(file_path):
+    """제외할 공시 제목 정규표현식 패턴을 로드합니다."""
+    patterns = []
+    if not os.path.exists(file_path):
+        print(f"제외 패턴 파일이 없습니다: {file_path}")
+        return patterns
+
+    with open(file_path, 'r', encoding='utf-8') as f:
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line or line.startswith('#'):
+                continue
+            try:
+                patterns.append(re.compile(line))
+            except re.error as e:
+                print(f"잘못된 제외 패턴 무시: {line} ({e})")
+    return patterns
+
+
+def is_excluded_report(report_name, excluded_patterns):
+    """공시 제목이 제외 패턴과 일치하는지 확인합니다."""
+    return any(pattern.search(report_name) for pattern in excluded_patterns)
 
 # --- 오류 분류 Enum ---
 class DARTErrorType(Enum):
@@ -441,6 +467,7 @@ def main():
     
     with open(COMPANIES_FILE, 'r', encoding='utf-8') as f:
         companies = [line.strip() for line in f if line.strip()]
+    excluded_patterns = load_excluded_report_patterns(EXCLUDED_REPORT_PATTERNS_FILE)
 
     updated_state = state.copy()
     
@@ -465,6 +492,11 @@ def main():
             
         for _, row in new_filings.iterrows():
             try:
+                if is_excluded_report(row['report_nm'], excluded_patterns):
+                    print(f" -> 제외된 공시: {row['report_nm']}")
+                    updated_state[corp_name] = row['rcept_no']
+                    continue
+
                 print(f" -> 새 공시 분석 중: {row['report_nm']}")
 
                 ai_result = analyze_content(row)
