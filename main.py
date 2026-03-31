@@ -103,20 +103,15 @@ def should_retry_error(error_type: DARTErrorType, retry_count: int) -> bool:
     # 절대 재시도하지 않을 오류
     non_retryable_errors = [
         DARTErrorType.INVALID_API_KEY,
-        DARTErrorType.UNKNOWN_ERROR
+        DARTErrorType.UNKNOWN_ERROR,
+        DARTErrorType.FILE_NOT_FOUND  # 014 오류는 파일이 확실히 없는 것이므로 재시도하지 않고 fallback을 사용합니다.
     ]
 
     if error_type in non_retryable_errors:
         return False
 
-    # FILE_NOT_FOUND 오류의 경우 최대 6회 재시도 (10분 간격)
-    if error_type == DARTErrorType.FILE_NOT_FOUND:
-        if retry_count >= 6:
-            return False
-    else:
-        # 다른 오류의 경우 기존 3회 제한 유지
-        if retry_count >= 3:
-            return False
+    if retry_count >= 3:
+        return False
 
     return True
 
@@ -150,11 +145,11 @@ def log_error_with_context(error_msg: str, rcept_no: str, retry_count: int, erro
     error_type_str = error_type.value
 
     # 최대 재시도 횟수 결정
-    max_retries = 6 if error_type == DARTErrorType.FILE_NOT_FOUND else 3
+    max_retries = 3
     log_msg = f"❌ 오류 (접수번호: {rcept_no}, 재시도: {retry_count}/{max_retries}, 유형: {error_type_str}): {error_msg}"
 
     if error_type == DARTErrorType.FILE_NOT_FOUND:
-        log_msg += " -> 임시 오류로 분류됨 (재시도 예정)"
+        log_msg += " -> 파일이 존재하지 않음 (HTML 본문 대체 시도)"
     elif error_type == DARTErrorType.TEMPORARY_ERROR:
         log_msg += " -> 임시 오류 (재시도 예정)"
     elif not should_retry_error(error_type, retry_count):
@@ -304,13 +299,40 @@ def fetch_and_extract_dart_content(crtfc_key, rcept_no, max_retries: int = 3):
             error_msg = str(e)
             error_type = classify_dart_error(error_msg, response_content)
 
+            # 014 (FILE_NOT_FOUND) 발생 시 HTML 폴백
+            if error_type == DARTErrorType.FILE_NOT_FOUND:
+                print(f"📄 XML 첨부파일 없음 (014 오류). HTML 뷰어 파싱 시도... ({rcept_no})")
+                try:
+                    fallback_url = f"http://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}"
+                    fallback_res = requests.get(fallback_url, timeout=10)
+                    fallback_res.raise_for_status()
+                    
+                    match = re.search(r"viewDoc\(['\"](\d+)['\"]\s*,\s*['\"](\d+)['\"]", fallback_res.text)
+                    if match:
+                        rcpNo = match.group(1)
+                        dcmNo = match.group(2)
+                        viewer_url = f"http://dart.fss.or.kr/report/viewer.do?rcpNo={rcpNo}&dcmNo={dcmNo}&eleId=0&offset=0&length=0&dtd=HTML"
+                        res_viewer = requests.get(viewer_url, timeout=10)
+                        res_viewer.raise_for_status()
+                        
+                        soup = BeautifulSoup(res_viewer.text, 'html.parser')
+                        text = soup.get_text(separator=' ').strip()
+                        clean_text = ' '.join(text.split())
+                        
+                        print(f"✅ HTML 폴백 성공: {len(clean_text)} 자 추출됨")
+                        return clean_text
+                    else:
+                        print("⚠️ HTML 뷰어 파싱 실패: dcmNo를 찾을 수 없습니다.")
+                except Exception as fallback_e:
+                    print(f"⚠️ HTML 폴백 실패: {fallback_e}")
+
             # 오류 로깅 및 재시도 결정
             log_error_with_context(error_msg, rcept_no, retry_count, error_type)
 
             if not should_retry_error(error_type, retry_count):
                 print(f"🛑 최종 실패: {error_msg}")
 
-                # FILE_NOT_FOUND 오류의 경우 last_filings.json에 기록
+                # FILE_NOT_FOUND 오류의 경우에도 last_filings.json에 기록
                 if error_type == DARTErrorType.FILE_NOT_FOUND:
                     # 기존 상태 파일 로드
                     failed_filings = {}
@@ -332,13 +354,8 @@ def fetch_and_extract_dart_content(crtfc_key, rcept_no, max_retries: int = 3):
                     print(f"📝 실패한 공시 기록: {rcept_no} (last_filings.json에 저장됨)")
                 break
 
-            # FILE_NOT_FOUND 오류의 경우 10분 고정 간격, 다른 오류의 경우 지수 백오프
-            if error_type == DARTErrorType.FILE_NOT_FOUND:
-                delay = fixed_interval_retry(retry_count)
-                print(f"⏳ 10분 후 재시도... (시도 {retry_count + 1}/6)")
-            else:
-                delay = exponential_backoff_retry(retry_count)
-                print(f"⏳ {delay:.1f}초 후 재시도...")
+            delay = exponential_backoff_retry(retry_count)
+            print(f"⏳ {delay:.1f}초 후 재시도...")
 
             time.sleep(delay)
             retry_count += 1
