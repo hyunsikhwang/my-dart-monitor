@@ -82,6 +82,9 @@ def classify_dart_error(error_msg: str, response_content: bytes = None) -> DARTE
     if "014" in error_msg or "파일이 존재하지 않습니다" in error_msg:
         return DARTErrorType.FILE_NOT_FOUND
 
+    if response_content and (b"014" in response_content or "파일이 존재하지 않습니다".encode('utf-8') in response_content):
+        return DARTErrorType.FILE_NOT_FOUND
+
     # 유효하지 않은 API 키
     if "010" in error_msg or "인증키" in error_msg or "api key" in error_msg:
         return DARTErrorType.INVALID_API_KEY
@@ -90,10 +93,8 @@ def classify_dart_error(error_msg: str, response_content: bytes = None) -> DARTE
     if "zip" in error_msg_lower or "badzipfile" in error_msg_lower:
         return DARTErrorType.ZIP_PROCESSING_ERROR
 
-    # 임시 오류 (재시도 가능)
-    if response_content and b"014" in response_content:
-        return DARTErrorType.TEMPORARY_ERROR
-
+    # 임시 오류 (재시도 가능) - 네트워크 타임아웃 등
+    # (주의: 014 오류는 위에서 FILE_NOT_FOUND로 처리됨)
     return DARTErrorType.UNKNOWN_ERROR
 
 def should_retry_error(error_type: DARTErrorType, retry_count: int) -> bool:
