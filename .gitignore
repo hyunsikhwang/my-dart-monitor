@@ -207,3 +207,4 @@ marimo/_lsp/
 __marimo__/
 test_error_handling.py
 simple_test.py
+.DS_Store
