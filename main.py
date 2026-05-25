@@ -431,7 +431,7 @@ def analyze_content(row):
     try:
         completion = client.chat.completions.create(
             extra_headers={"HTTP-Referer": "https://github.com", "X-Title": "DartBot"},
-            model="google/gemini-3.1-flash-lite",
+            model="deepseek/deepseek-v4-flash",
             messages=[
             {
                 "role": "system",
