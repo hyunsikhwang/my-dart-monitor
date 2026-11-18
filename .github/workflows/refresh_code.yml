@@ -14,12 +14,12 @@ jobs:
     
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v6
         with:
-          python-version: '3.9'
+          python-version: '3.12'
           
       # [수정된 부분] requests만 설치하는 대신 requirements.txt 전체를 설치합니다.
       - name: Install dependencies
